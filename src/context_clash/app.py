@@ -15,6 +15,7 @@ st.markdown("""
 <style>
     .stChatMessage { border-radius: 15px; padding: 10px; margin-bottom: 10px; }
     .metric-container { background-color: #ffffff; padding: 15px; border-radius: 10px; border: 1px solid #e6e6e6; margin-bottom: 10px; }
+    .stButton > button { border-radius: 8px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -71,7 +72,7 @@ with st.sidebar:
 
     st.divider()
     
-    st.subheader("Personas (Editable Mid-Clash)")
+    st.subheader("Personas")
     ai1_persona = st.text_area("AI 1 Persona:", "You are a grumpy old wizard who hates technology.")
     ai2_persona = st.text_area("AI 2 Persona:", "You are a hyper-enthusiastic, passive-aggressive tech support agent.")
     
@@ -90,12 +91,19 @@ with st.sidebar:
 
 # --- Main Interface ---
 st.title("🤖 Context-Clash: Neural Showdown")
-st.caption("A pausable debate arena. Change personas in the sidebar at any time to steer the AI.")
+st.caption("A debate arena where you can intervene as a Moderator or assume the identity of an AI.")
 
+# Display Chat History
 for msg in st.session_state.history:
     avatar = "🧙‍♂️" if "AI 1" in msg["role"] else ("🤖" if "AI 2" in msg["role"] else "👤")
     with st.chat_message(msg["role"], avatar=avatar):
         st.markdown(msg["content"])
+
+# Determining who is next in line
+is_ai1_turn = st.session_state.turn_count % 2 == 0
+upcoming_label = "AI 1" if is_ai1_turn else "AI 2"
+
+# --- LOGIC: Interaction Flow ---
 
 if not st.session_state.battle_started:
     st.info("Arena Ready. Set the first topic.")
@@ -106,37 +114,39 @@ if not st.session_state.battle_started:
         st.rerun()
 
 elif not st.session_state.paused and st.session_state.turn_count < max_turns:
-    is_ai1 = st.session_state.turn_count % 2 == 0
-    label = "AI 1" if is_ai1 else "AI 2"
-    rival_label = "AI 2" if is_ai1 else "AI 1"
-    model, persona = (ai1_model, ai1_persona) if is_ai1 else (ai2_model, ai2_persona)
+    label, rival_label = ("AI 1", "AI 2") if is_ai1_turn else ("AI 2", "AI 1")
+    model, persona = (ai1_model, ai1_persona) if is_ai1_turn else (ai2_model, ai2_persona)
     
-    # --- ROLE & IDENTITY FIX ---
-    # We construct the message history specifically for the speaker.
-    # The 'assistant' is always the model currently being called.
-    messages = [{"role": "system", "content": f"YOUR PERSONA: {persona}\nINSTRUCTIONS: You are in a debate. Engage with the last message and stay in character. Do not be overly brief if there is more to argue."}]
+    # Construct history
+    messages = [
+        {
+            "role": "system", 
+            "content": f"YOUR PERSONA: {persona}\nCORE RULE: You are {label} debating {rival_label}. Don't use tags like [Moderator]."
+        }
+    ]
     
     for m in st.session_state.history:
         if m["role"] == label:
-            # This was said by the current model in a previous turn
             messages.append({"role": "assistant", "content": m["content"]})
         elif m["role"] == rival_label:
-            # This was said by the opponent
-            messages.append({"role": "user", "content": f"[{rival_label}]: {m['content']}"})
+            messages.append({"role": "user", "content": f"{rival_label} says: {m['content']}"})
+        elif m["role"] == "User Trigger":
+            messages.append({"role": "user", "content": f"Topic: {m['content']}"})
         else:
-            # This was a user trigger or intervention
-            messages.append({"role": "user", "content": f"[Moderator]: {m['content']}"})
+            messages.append({"role": "user", "content": f"Moderator says: {m['content']}"})
     
-    with st.chat_message(label, avatar="🧙‍♂️" if is_ai1 else "🤖"):
-        with st.spinner(f"{label} is thinking..."):
+    with st.chat_message(label, avatar="🧙‍♂️" if is_ai1_turn else "🤖"):
+        with st.spinner(f"{label} is generating..."):
             try:
                 start = time.time()
                 resp = ollama.chat(model=model, messages=messages)
                 dur = time.time() - start
                 
                 reply = resp['message']['content']
-                tokens = resp.get('prompt_eval_count', 0) + resp.get('eval_count', 0)
+                if reply.startswith(f"{label}:"):
+                    reply = reply[len(f"{label}:"):].strip()
                 
+                tokens = resp.get('prompt_eval_count', 0) + resp.get('eval_count', 0)
                 st.session_state.total_tokens += tokens
                 if dur > 0: st.session_state.last_speed = resp.get('eval_count', 0) / dur
                 
@@ -151,14 +161,36 @@ elif not st.session_state.paused and st.session_state.turn_count < max_turns:
 elif st.session_state.paused:
     st.divider()
     st.subheader("⏸️ Intervention Mode")
-    st.caption("Change personas in the sidebar now if you want to shift the AI's personality.")
-    user_input = st.text_input("Heckle/Interject:", key="heckle")
-    c1, c2 = st.columns(2)
-    if c1.button("Inject & Continue"):
-        if user_input:
-            st.session_state.history.append({"role": "User Intervention", "content": user_input})
+    
+    # Intervention UI
+    mode = st.radio(
+        "Choose your action identity:",
+        ["Moderator (Neutral)", f"Impersonate {upcoming_label} (Skip AI turn)"],
+        horizontal=True
+    )
+    
+    user_input = st.text_input("Enter your words:", key="heckle_input")
+    
+    c1, c2 = st.columns([1, 1])
+    
+    with c1:
+        if st.button("Submit Response", use_container_width=True):
+            if user_input:
+                if "Impersonate" in mode:
+                    # Replace the AI's turn with your own text
+                    st.session_state.history.append({"role": upcoming_label, "content": user_input})
+                    st.session_state.turn_count += 1
+                else:
+                    # Act as a moderator interjection
+                    st.session_state.history.append({"role": "User Intervention", "content": user_input})
+                
+                st.session_state.paused = False
+                st.rerun()
+                
+    with c2:
+        if st.button(f"Let {upcoming_label} Speak", use_container_width=True):
             st.session_state.paused = False
             st.rerun()
-    if c2.button("Let AI Continue"):
-        st.session_state.paused = False
-        st.rerun()
+
+if st.session_state.turn_count >= max_turns:
+    st.success("Clash ended. Maximum turns reached.")
