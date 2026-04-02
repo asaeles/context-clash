@@ -72,6 +72,21 @@ with st.sidebar:
 
     st.divider()
     
+    st.subheader("Generation Settings")
+    # Added verbosity control to save response time
+    verbosity = st.select_slider(
+        "Response Verbosity:",
+        options=["Short", "Medium", "Long", "Uncapped"],
+        value="Medium",
+        help="Shorter responses save significant time on laptop CPUs."
+    )
+    
+    # Map label to token counts
+    verbosity_map = {"Short": 50, "Medium": 150, "Long": 400, "Uncapped": -1}
+    max_tokens = verbosity_map[verbosity]
+
+    st.divider()
+    
     st.subheader("Personas")
     ai1_persona = st.text_area("AI 1 Persona:", "You are a grumpy old wizard who hates technology.")
     ai2_persona = st.text_area("AI 2 Persona:", "You are a hyper-enthusiastic, passive-aggressive tech support agent.")
@@ -91,7 +106,7 @@ with st.sidebar:
 
 # --- Main Interface ---
 st.title("🤖 Context-Clash: Neural Showdown")
-st.caption("A debate arena where you can intervene as a Moderator or assume the identity of an AI.")
+st.caption("Now with Real-time Streaming and Verbosity Control.")
 
 # Display Chat History
 for msg in st.session_state.history:
@@ -121,7 +136,7 @@ elif not st.session_state.paused and st.session_state.turn_count < max_turns:
     messages = [
         {
             "role": "system", 
-            "content": f"YOUR PERSONA: {persona}\nCORE RULE: You are {label} debating {rival_label}. Don't use tags like [Moderator]."
+            "content": f"YOUR PERSONA: {persona}\nCORE RULE: You are {label} debating {rival_label}. Just output dialogue."
         }
     ]
     
@@ -136,33 +151,47 @@ elif not st.session_state.paused and st.session_state.turn_count < max_turns:
             messages.append({"role": "user", "content": f"Moderator says: {m['content']}"})
     
     with st.chat_message(label, avatar="🧙‍♂️" if is_ai1_turn else "🤖"):
-        with st.spinner(f"{label} is generating..."):
-            try:
-                start = time.time()
-                resp = ollama.chat(model=model, messages=messages)
-                dur = time.time() - start
-                
-                reply = resp['message']['content']
-                if reply.startswith(f"{label}:"):
-                    reply = reply[len(f"{label}:"):].strip()
-                
-                tokens = resp.get('prompt_eval_count', 0) + resp.get('eval_count', 0)
-                st.session_state.total_tokens += tokens
-                if dur > 0: st.session_state.last_speed = resp.get('eval_count', 0) / dur
-                
-                st.markdown(reply)
-                st.session_state.history.append({"role": label, "content": reply})
-                st.session_state.turn_count += 1
-                st.session_state.paused = True
-                st.rerun()
-            except Exception as e:
-                st.error(f"Error: {e}")
+        placeholder = st.empty() # Create a placeholder for streaming text
+        full_response = ""
+        
+        try:
+            start_time = time.time()
+            # Set up the streaming generator
+            stream = ollama.chat(
+                model=model, 
+                messages=messages, 
+                stream=True,
+                options={"num_predict": max_tokens} if max_tokens > 0 else {}
+            )
+            
+            token_count = 0
+            for chunk in stream:
+                content = chunk['message']['content']
+                full_response += content
+                token_count += 1
+                # Update placeholder in real-time
+                placeholder.markdown(full_response + "▌")
+            
+            duration = time.time() - start_time
+            placeholder.markdown(full_response) # Final render without cursor
+            
+            # Update metrics
+            st.session_state.total_tokens += token_count
+            if duration > 0:
+                st.session_state.last_speed = token_count / duration
+            
+            st.session_state.history.append({"role": label, "content": full_response})
+            st.session_state.turn_count += 1
+            st.session_state.paused = True
+            st.rerun()
+            
+        except Exception as e:
+            st.error(f"Error: {e}")
 
 elif st.session_state.paused:
     st.divider()
     st.subheader("⏸️ Intervention Mode")
     
-    # Intervention UI
     mode = st.radio(
         "Choose your action identity:",
         ["Moderator (Neutral)", f"Impersonate {upcoming_label} (Skip AI turn)"],
@@ -177,13 +206,10 @@ elif st.session_state.paused:
         if st.button("Submit Response", use_container_width=True):
             if user_input:
                 if "Impersonate" in mode:
-                    # Replace the AI's turn with your own text
                     st.session_state.history.append({"role": upcoming_label, "content": user_input})
                     st.session_state.turn_count += 1
                 else:
-                    # Act as a moderator interjection
                     st.session_state.history.append({"role": "User Intervention", "content": user_input})
-                
                 st.session_state.paused = False
                 st.rerun()
                 
