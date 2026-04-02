@@ -77,10 +77,21 @@ with st.sidebar:
     verbosity = st.select_slider(
         "Response Verbosity:",
         options=["Short", "Medium", "Long", "Uncapped"],
-        value="Medium"
+        value="Medium",
+        help="Controls both the AI's intent and the hard cutoff limit."
     )
-    verbosity_map = {"Short": 50, "Medium": 150, "Long": 400, "Uncapped": -1}
-    max_tokens = verbosity_map[verbosity]
+    
+    # Mapping Slider to BOTH Hard Limits and Soft Instructions
+    verbosity_config = {
+        "Short": {"limit": 100, "note": "Keep your response extremely brief (1-2 sentences maximum)."},
+        "Medium": {"limit": 250, "note": "Provide a concise response (about 1 paragraph)."},
+        "Long": {"limit": 500, "note": "Provide a detailed, expansive response with multiple points."},
+        "Uncapped": {"limit": -1, "note": "Feel free to be as verbose and long-winded as your character desires."}
+    }
+    
+    current_config = verbosity_config[verbosity]
+    max_tokens = current_config["limit"]
+    length_instruction = current_config["note"]
 
     st.divider()
     
@@ -125,15 +136,15 @@ elif not st.session_state.paused and st.session_state.turn_count < max_turns:
     model, persona = (ai1_model, ai1_persona) if is_ai1_turn else (ai2_model, ai2_persona)
     rival_persona = ai2_persona if is_ai1_turn else ai1_persona
     
-    # --- IDENTITY ANCHORING FIX ---
+    # --- IDENTITY ANCHORING & LENGTH INSTRUCTION ---
     messages = [
         {
             "role": "system", 
             "content": (
                 f"You are {label}. Your character description is: {persona}\n"
-                f"You are currently debating your rival, {rival_label} (who is: {rival_persona}).\n"
-                "STRICT RULE: Only speak for yourself. Do not summarize or act as your rival. "
-                "Output ONLY your character's dialogue."
+                f"You are debating {rival_label} (who is: {rival_persona}).\n"
+                f"LENGTH INSTRUCTION: {length_instruction}\n"
+                "STRICT RULE: Only speak for yourself. Output ONLY your character's dialogue."
             )
         }
     ]
@@ -142,7 +153,6 @@ elif not st.session_state.paused and st.session_state.turn_count < max_turns:
         if m["role"] == label:
             messages.append({"role": "assistant", "content": m["content"]})
         elif m["role"] == rival_label:
-            # We explicitly label the rival's message with their identity to prevent character bleed
             messages.append({"role": "user", "content": f"Message from your rival {rival_label}: {m['content']}"})
         elif m["role"] == "User Trigger":
             messages.append({"role": "user", "content": f"The Moderator set the topic as: {m['content']}"})
@@ -166,7 +176,6 @@ elif not st.session_state.paused and st.session_state.turn_count < max_turns:
                 token_count += 1
                 placeholder.markdown(full_response + "▌")
             
-            # Clean up potential role-play hallucinations
             if full_response.startswith(f"{label}:"):
                 full_response = full_response[len(f"{label}:"):].strip()
             
