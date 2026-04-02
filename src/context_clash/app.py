@@ -16,6 +16,7 @@ st.markdown("""
     .stChatMessage { border-radius: 15px; padding: 10px; margin-bottom: 10px; }
     .metric-container { background-color: #ffffff; padding: 15px; border-radius: 10px; border: 1px solid #e6e6e6; margin-bottom: 10px; }
     .stButton > button { border-radius: 8px; }
+    .identity-tag { font-size: 0.8em; color: #666; margin-bottom: 4px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -73,31 +74,23 @@ with st.sidebar:
     st.divider()
     
     st.subheader("Generation Settings")
-    # Added verbosity control to save response time
     verbosity = st.select_slider(
         "Response Verbosity:",
         options=["Short", "Medium", "Long", "Uncapped"],
-        value="Medium",
-        help="Shorter responses save significant time on laptop CPUs."
+        value="Medium"
     )
-    
-    # Map label to token counts
     verbosity_map = {"Short": 50, "Medium": 150, "Long": 400, "Uncapped": -1}
     max_tokens = verbosity_map[verbosity]
 
     st.divider()
     
     st.subheader("Personas")
-    ai1_persona = st.text_area("AI 1 Persona:", "You are a grumpy old wizard who hates technology.")
-    ai2_persona = st.text_area("AI 2 Persona:", "You are a hyper-enthusiastic, passive-aggressive tech support agent.")
+    ai1_persona = st.text_area("AI 1 (Wizard) Persona:", "You are a grumpy old wizard who hates technology.")
+    ai2_persona = st.text_area("AI 2 (Support) Persona:", "You are a hyper-enthusiastic, passive-aggressive tech support agent.")
     
     st.divider()
     
     max_turns = st.slider("Max Clash Turns:", 2, 100, 20)
-    
-    if st.session_state.history:
-        transcript = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in st.session_state.history])
-        st.download_button("💾 Save Transcript", transcript, "transcript.txt")
     
     if st.button("🔥 Reset Clash", use_container_width=True):
         st.session_state.history, st.session_state.turn_count, st.session_state.total_tokens = [], 0, 0
@@ -106,7 +99,6 @@ with st.sidebar:
 
 # --- Main Interface ---
 st.title("🤖 Context-Clash: Neural Showdown")
-st.caption("Now with Real-time Streaming and Verbosity Control.")
 
 # Display Chat History
 for msg in st.session_state.history:
@@ -114,7 +106,7 @@ for msg in st.session_state.history:
     with st.chat_message(msg["role"], avatar=avatar):
         st.markdown(msg["content"])
 
-# Determining who is next in line
+# Determining turns
 is_ai1_turn = st.session_state.turn_count % 2 == 0
 upcoming_label = "AI 1" if is_ai1_turn else "AI 2"
 
@@ -131,12 +123,18 @@ if not st.session_state.battle_started:
 elif not st.session_state.paused and st.session_state.turn_count < max_turns:
     label, rival_label = ("AI 1", "AI 2") if is_ai1_turn else ("AI 2", "AI 1")
     model, persona = (ai1_model, ai1_persona) if is_ai1_turn else (ai2_model, ai2_persona)
+    rival_persona = ai2_persona if is_ai1_turn else ai1_persona
     
-    # Construct history
+    # --- IDENTITY ANCHORING FIX ---
     messages = [
         {
             "role": "system", 
-            "content": f"YOUR PERSONA: {persona}\nCORE RULE: You are {label} debating {rival_label}. Just output dialogue."
+            "content": (
+                f"You are {label}. Your character description is: {persona}\n"
+                f"You are currently debating your rival, {rival_label} (who is: {rival_persona}).\n"
+                "STRICT RULE: Only speak for yourself. Do not summarize or act as your rival. "
+                "Output ONLY your character's dialogue."
+            )
         }
     ]
     
@@ -144,64 +142,57 @@ elif not st.session_state.paused and st.session_state.turn_count < max_turns:
         if m["role"] == label:
             messages.append({"role": "assistant", "content": m["content"]})
         elif m["role"] == rival_label:
-            messages.append({"role": "user", "content": f"{rival_label} says: {m['content']}"})
+            # We explicitly label the rival's message with their identity to prevent character bleed
+            messages.append({"role": "user", "content": f"Message from your rival {rival_label}: {m['content']}"})
         elif m["role"] == "User Trigger":
-            messages.append({"role": "user", "content": f"Topic: {m['content']}"})
+            messages.append({"role": "user", "content": f"The Moderator set the topic as: {m['content']}"})
         else:
-            messages.append({"role": "user", "content": f"Moderator says: {m['content']}"})
+            messages.append({"role": "user", "content": f"A Moderator interjects: {m['content']}"})
     
     with st.chat_message(label, avatar="🧙‍♂️" if is_ai1_turn else "🤖"):
-        placeholder = st.empty() # Create a placeholder for streaming text
+        placeholder = st.empty()
         full_response = ""
-        
         try:
-            start_time = time.time()
-            # Set up the streaming generator
             stream = ollama.chat(
                 model=model, 
                 messages=messages, 
                 stream=True,
                 options={"num_predict": max_tokens} if max_tokens > 0 else {}
             )
-            
             token_count = 0
             for chunk in stream:
                 content = chunk['message']['content']
                 full_response += content
                 token_count += 1
-                # Update placeholder in real-time
                 placeholder.markdown(full_response + "▌")
             
-            duration = time.time() - start_time
-            placeholder.markdown(full_response) # Final render without cursor
+            # Clean up potential role-play hallucinations
+            if full_response.startswith(f"{label}:"):
+                full_response = full_response[len(f"{label}:"):].strip()
             
-            # Update metrics
+            placeholder.markdown(full_response)
             st.session_state.total_tokens += token_count
-            if duration > 0:
-                st.session_state.last_speed = token_count / duration
-            
             st.session_state.history.append({"role": label, "content": full_response})
             st.session_state.turn_count += 1
             st.session_state.paused = True
             st.rerun()
-            
         except Exception as e:
             st.error(f"Error: {e}")
 
 elif st.session_state.paused:
     st.divider()
-    st.subheader("⏸️ Intervention Mode")
+    st.subheader(f"⏸️ Intervention Mode (Next up: {upcoming_label})")
     
     mode = st.radio(
         "Choose your action identity:",
         ["Moderator (Neutral)", f"Impersonate {upcoming_label} (Skip AI turn)"],
-        horizontal=True
+        horizontal=True,
+        help="Impersonating will record the response as the AI itself, skipping its generation turn."
     )
     
     user_input = st.text_input("Enter your words:", key="heckle_input")
     
     c1, c2 = st.columns([1, 1])
-    
     with c1:
         if st.button("Submit Response", use_container_width=True):
             if user_input:
@@ -217,6 +208,3 @@ elif st.session_state.paused:
         if st.button(f"Let {upcoming_label} Speak", use_container_width=True):
             st.session_state.paused = False
             st.rerun()
-
-if st.session_state.turn_count >= max_turns:
-    st.success("Clash ended. Maximum turns reached.")
