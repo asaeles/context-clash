@@ -23,11 +23,10 @@ def get_local_models():
     """Fetches a list of models currently installed in the local Ollama engine."""
     try:
         response = ollama.list()
-        # Extract model names from the response objects
         models = [m['model'] for m in response.get('models', [])]
-        return models if models else ["llama3"] # Fallback if list is empty
+        return models if models else ["llama3"]
     except Exception:
-        return ["llama3"] # Fallback if Ollama service isn't reachable
+        return ["llama3"]
 
 # --- Session State Initialization ---
 if "history" not in st.session_state:
@@ -49,7 +48,6 @@ if "context_limit" not in st.session_state:
 with st.sidebar:
     st.title("🛡️ Clash Controls")
     
-    # --- Live Statistics Section ---
     st.subheader("📊 Session Statistics")
     col1, col2 = st.columns(2)
     with col1:
@@ -57,17 +55,14 @@ with st.sidebar:
     with col2:
         st.metric("Speed", f"{st.session_state.last_speed:.1f} t/s")
     
-    # Context Window Progress Bar
     usage_pct = min(st.session_state.total_tokens / st.session_state.context_limit, 1.0)
     st.write(f"**Context Saturation:** {usage_pct*100:.1f}%")
     st.progress(usage_pct)
 
     st.divider()
     
-    # --- Dynamic Model Selection ---
     st.subheader("Model Selection")
     local_models = get_local_models()
-    
     ai1_model = st.selectbox("AI 1 Model", local_models, index=0)
     ai2_model = st.selectbox("AI 2 Model", local_models, index=min(1, len(local_models)-1))
     
@@ -76,7 +71,7 @@ with st.sidebar:
 
     st.divider()
     
-    st.subheader("Personas")
+    st.subheader("Personas (Editable Mid-Clash)")
     ai1_persona = st.text_area("AI 1 Persona:", "You are a grumpy old wizard who hates technology.")
     ai2_persona = st.text_area("AI 2 Persona:", "You are a hyper-enthusiastic, passive-aggressive tech support agent.")
     
@@ -95,7 +90,7 @@ with st.sidebar:
 
 # --- Main Interface ---
 st.title("🤖 Context-Clash: Neural Showdown")
-st.caption("The ultimate pausable debate between local AI minds.")
+st.caption("A pausable debate arena. Change personas in the sidebar at any time to steer the AI.")
 
 for msg in st.session_state.history:
     avatar = "🧙‍♂️" if "AI 1" in msg["role"] else ("🤖" if "AI 2" in msg["role"] else "👤")
@@ -114,19 +109,22 @@ elif not st.session_state.paused and st.session_state.turn_count < max_turns:
     is_ai1 = st.session_state.turn_count % 2 == 0
     label, model, persona = ("AI 1", ai1_model, ai1_persona) if is_ai1 else ("AI 2", ai2_model, ai2_persona)
     
-    last_msg = st.session_state.history[-1]["content"]
+    # --- CONTEXT FIX: Construct full message history for the AI ---
+    messages = [{"role": "system", "content": f"{persona} Stay in character. Keep replies concise."}]
+    for m in st.session_state.history:
+        # Map our custom labels to Ollama's expected roles
+        role = "assistant" if "AI" in m["role"] else "user"
+        messages.append({"role": role, "content": m["content"]})
     
     with st.chat_message(label, avatar="🧙‍♂️" if is_ai1 else "🤖"):
         with st.spinner(f"{label} is thinking..."):
             try:
                 start = time.time()
-                resp = ollama.chat(model=model, messages=[
-                    {"role": "system", "content": f"{persona} Keep it concise."},
-                    {"role": "user", "content": last_msg}
-                ])
+                resp = ollama.chat(model=model, messages=messages)
                 dur = time.time() - start
                 
                 reply = resp['message']['content']
+                # Calculate tokens used in this specific exchange
                 tokens = resp.get('prompt_eval_count', 0) + resp.get('eval_count', 0)
                 
                 st.session_state.total_tokens += tokens
@@ -143,6 +141,7 @@ elif not st.session_state.paused and st.session_state.turn_count < max_turns:
 elif st.session_state.paused:
     st.divider()
     st.subheader("⏸️ Intervention Mode")
+    st.caption("Change personas in the sidebar now if you want to shift the AI's personality.")
     user_input = st.text_input("Heckle/Interject:", key="heckle")
     c1, c2 = st.columns(2)
     if c1.button("Inject & Continue"):
