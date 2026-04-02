@@ -1,6 +1,5 @@
 import streamlit as st
 import ollama
-import json
 import time
 
 # --- Page Configuration ---
