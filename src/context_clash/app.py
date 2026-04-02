@@ -107,14 +107,25 @@ if not st.session_state.battle_started:
 
 elif not st.session_state.paused and st.session_state.turn_count < max_turns:
     is_ai1 = st.session_state.turn_count % 2 == 0
-    label, model, persona = ("AI 1", ai1_model, ai1_persona) if is_ai1 else ("AI 2", ai2_model, ai2_persona)
+    label = "AI 1" if is_ai1 else "AI 2"
+    rival_label = "AI 2" if is_ai1 else "AI 1"
+    model, persona = (ai1_model, ai1_persona) if is_ai1 else (ai2_model, ai2_persona)
     
-    # --- CONTEXT FIX: Construct full message history for the AI ---
-    messages = [{"role": "system", "content": f"{persona} Stay in character. Keep replies concise."}]
+    # --- ROLE & IDENTITY FIX ---
+    # We construct the message history specifically for the speaker.
+    # The 'assistant' is always the model currently being called.
+    messages = [{"role": "system", "content": f"YOUR PERSONA: {persona}\nINSTRUCTIONS: You are in a debate. Engage with the last message and stay in character. Do not be overly brief if there is more to argue."}]
+    
     for m in st.session_state.history:
-        # Map our custom labels to Ollama's expected roles
-        role = "assistant" if "AI" in m["role"] else "user"
-        messages.append({"role": role, "content": m["content"]})
+        if m["role"] == label:
+            # This was said by the current model in a previous turn
+            messages.append({"role": "assistant", "content": m["content"]})
+        elif m["role"] == rival_label:
+            # This was said by the opponent
+            messages.append({"role": "user", "content": f"[{rival_label}]: {m['content']}"})
+        else:
+            # This was a user trigger or intervention
+            messages.append({"role": "user", "content": f"[Moderator]: {m['content']}"})
     
     with st.chat_message(label, avatar="🧙‍♂️" if is_ai1 else "🤖"):
         with st.spinner(f"{label} is thinking..."):
@@ -124,7 +135,6 @@ elif not st.session_state.paused and st.session_state.turn_count < max_turns:
                 dur = time.time() - start
                 
                 reply = resp['message']['content']
-                # Calculate tokens used in this specific exchange
                 tokens = resp.get('prompt_eval_count', 0) + resp.get('eval_count', 0)
                 
                 st.session_state.total_tokens += tokens
