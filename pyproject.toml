@@ -1,15 +1,25 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "context-clash"
 version = "0.1.0"
+authors = [
+  {name = "Ahmad Sulaeman", email = "asaeles@gmail.com"},
+]
 description = "A neural showdown arena for AI-on-AI debate with human intervention."
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "streamlit",
     "ollama",
 ]
+license = "MIT"
+license-files = ["LICEN[CS]E*"]
+
+[project.urls]
+Homepage = "https://github.com/asaeles/context-clash"
 
 [project.scripts]
 clash = "context_clash.cli:main"
